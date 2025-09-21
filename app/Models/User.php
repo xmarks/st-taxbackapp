@@ -4,6 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -101,5 +102,20 @@ class User extends Authenticatable
             self::ROLE_MODERATOR => 'Moderator',
             self::ROLE_REGISTERED => 'Registered',
         ];
+    }
+
+    public function scannedReceipts(): HasMany
+    {
+        return $this->hasMany(ScannedReceipt::class);
+    }
+
+    public function getTotalVatAmount(): float
+    {
+        return $this->scannedReceipts()->sum('total_vat_amount');
+    }
+
+    public function getReceiptCount(): int
+    {
+        return $this->scannedReceipts()->count();
     }
 }
