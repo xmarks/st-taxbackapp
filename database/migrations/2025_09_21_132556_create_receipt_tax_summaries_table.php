@@ -17,9 +17,9 @@ return new class extends Migration
 
             $table->bigInteger('tax_fiscal_id'); // id from sameTaxes
             $table->integer('number_of_items');
-            $table->decimal('price_before_vat', 10, 2);
+            $table->decimal('price_before_vat', 15, 2);
             $table->decimal('vat_rate', 5, 2);
-            $table->decimal('vat_amount', 10, 2);
+            $table->decimal('vat_amount', 15, 2);
             $table->boolean('exempt_from_vat')->default(false);
 
             $table->timestamps();

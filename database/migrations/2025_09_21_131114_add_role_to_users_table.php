@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->tinyInteger('role')->default(100)->after('email');
+            $table->unsignedTinyInteger('role')->default(100)->after('email');
         });
     }
 

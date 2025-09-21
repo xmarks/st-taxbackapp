@@ -35,10 +35,10 @@ return new class extends Migration
             $table->timestamp('scanned_at'); // When user scanned it
 
             // Financial totals
-            $table->decimal('total_price', 10, 2); // totalPrice
-            $table->decimal('total_price_without_vat', 10, 2); // totalPriceWithoutVAT
-            $table->decimal('total_vat_amount', 10, 2); // totalVATAmount
-            $table->decimal('tax_free_amount', 10, 2)->default(0); // taxFreeAmt
+            $table->decimal('total_price', 15, 2); // totalPrice
+            $table->decimal('total_price_without_vat', 15, 2); // totalPriceWithoutVAT
+            $table->decimal('total_vat_amount', 15, 2); // totalVATAmount
+            $table->decimal('tax_free_amount', 15, 2)->default(0); // taxFreeAmt
 
             // Invoice details
             $table->string('invoice_type', 20); // CASH, etc
@@ -48,7 +48,7 @@ return new class extends Migration
 
             // QR scan data
             $table->text('original_url'); // Full QR code URL
-            $table->decimal('url_price', 10, 2); // Price from URL (for validation)
+            $table->decimal('url_price', 15, 2); // Price from URL (for validation)
 
             // Store full API response for future reference
             $table->json('raw_api_response');

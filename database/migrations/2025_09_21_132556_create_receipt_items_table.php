@@ -22,18 +22,18 @@ return new class extends Migration
             $table->decimal('quantity', 10, 3);
 
             // Pricing
-            $table->decimal('unit_price_before_vat', 10, 2);
-            $table->decimal('unit_price_after_vat', 10, 2);
-            $table->decimal('price_before_vat', 10, 2);
-            $table->decimal('price_after_vat', 10, 2);
+            $table->decimal('unit_price_before_vat', 15, 2);
+            $table->decimal('unit_price_after_vat', 15, 2);
+            $table->decimal('price_before_vat', 15, 2);
+            $table->decimal('price_after_vat', 15, 2);
 
             // VAT details
             $table->decimal('vat_rate', 5, 2); // 20.00 for 20%
-            $table->decimal('vat_amount', 10, 2);
+            $table->decimal('vat_amount', 15, 2);
             $table->boolean('exempt_from_vat')->default(false);
 
             // Discounts
-            $table->decimal('rebate', 10, 2)->default(0);
+            $table->decimal('rebate', 15, 2)->default(0);
             $table->boolean('rebate_reducing')->default(true);
 
             $table->boolean('investment')->default(false);
