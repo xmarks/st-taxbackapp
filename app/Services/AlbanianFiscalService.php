@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\ReceiptException;
 use Carbon\Carbon;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -92,6 +93,9 @@ class AlbanianFiscalService
         $queryPart = substr($fragment, strpos($fragment, '?') + 1);
         parse_str($queryPart, $params);
 
+        // URL decode the parameters since they come from a URL
+        $params = array_map('urldecode', $params);
+
         // Validate required parameters
         $requiredParams = ['iic', 'tin', 'crtd', 'prc'];
         foreach ($requiredParams as $param) {
@@ -108,7 +112,83 @@ class AlbanianFiscalService
         ];
     }
 
-    private function isValidAlbanianReceipt(array $data): bool
+    /**
+     * Parse QR input with strict validation that throws exceptions
+     */
+    public function parseQrInputStrict(string $input): array
+    {
+        // If it's a URL, parse it
+        if (str_contains($input, 'efiskalizimi-app.tatime.gov.al')) {
+            $data = $this->parseQrUrl($input);
+            if (!$data) {
+                throw ReceiptException::invalidFormat('Invalid Albanian fiscal URL format');
+            }
+            return $data;
+        }
+
+        // If it's JSON data, decode it
+        if (str_starts_with($input, '{')) {
+            $data = json_decode($input, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw ReceiptException::parsingError('Invalid JSON: ' . json_last_error_msg());
+            }
+
+            $this->validateQrParameters($data);
+            return $data;
+        }
+
+        // If it's query string format
+        if (str_contains($input, 'iic=')) {
+            parse_str($input, $data);
+            $this->validateQrParameters($data);
+            return $data;
+        }
+
+        throw ReceiptException::invalidFormat('Unrecognized QR code format');
+    }
+
+    /**
+     * Validate QR parameters with detailed error messages
+     */
+    private function validateQrParameters(array $params): void
+    {
+        $requiredParams = ['iic', 'tin', 'crtd', 'prc'];
+        $missing = [];
+
+        foreach ($requiredParams as $param) {
+            if (!isset($params[$param]) || empty($params[$param])) {
+                $missing[] = $param;
+            }
+        }
+
+        if (!empty($missing)) {
+            throw ReceiptException::invalidFormat('Missing required parameters: ' . implode(', ', $missing));
+        }
+
+        // Validate IIC format
+        if (!preg_match('/^[a-fA-F0-9]{32}$/', $params['iic'])) {
+            throw ReceiptException::invalidFormat('Invalid IIC format');
+        }
+
+        // Validate TIN format
+        if (!preg_match('/^[KL]\d{8}[A-Z]$/', $params['tin'])) {
+            throw ReceiptException::invalidFormat('Invalid Albanian TIN format');
+        }
+
+        // Validate price
+        if (!is_numeric($params['prc']) || (float) $params['prc'] <= 0) {
+            throw ReceiptException::invalidFormat('Invalid price value');
+        }
+
+        // Validate date
+        try {
+            $this->parseAlbanianDateTime($params['crtd']);
+        } catch (\Exception $e) {
+            throw ReceiptException::invalidFormat('Invalid date format');
+        }
+    }
+
+    public function isValidAlbanianReceipt(array $data): bool
     {
         // Check if seller information exists and is from Albania
         if (!isset($data['seller'])) {
@@ -133,8 +213,8 @@ class AlbanianFiscalService
     public function isReceiptExpired(string $dateTimeCreated): bool
     {
         try {
-            $receiptDate = Carbon::parse($dateTimeCreated);
-            $validityHours = config('receipt.validity_hours', 24);
+            $receiptDate = $this->parseAlbanianDateTime($dateTimeCreated);
+            $validityHours = (int) config('receipt.validity_hours', 24);
             $expiryTime = $receiptDate->addHours($validityHours);
 
             return Carbon::now()->gt($expiryTime);
@@ -147,10 +227,53 @@ class AlbanianFiscalService
         }
     }
 
+    /**
+     * Parse Albanian fiscal system date format with fallback to other formats
+     */
+    private function parseAlbanianDateTime(string $dateTime): Carbon
+    {
+        // Handle Albanian fiscal format specifically: "2025-09-13T18:56:07 02:00"
+        // This format has a space and no + sign before timezone
+        if (preg_match('/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}) (\d{2}:\d{2})$/', $dateTime, $matches)) {
+            // Convert to standard ISO format by adding the + sign
+            $standardFormat = $matches[1] . '+' . $matches[2];
+            try {
+                return new Carbon($standardFormat);
+            } catch (\Exception $e) {
+                // Continue to other formats
+            }
+        }
+
+        // List of other acceptable date formats
+        $formats = [
+            \DateTime::ATOM,                    // 2025-09-13T18:56:07+02:00
+            'Y-m-d\TH:i:s P',                  // 2025-09-13T18:56:07 +02:00 (with space and +)
+            'Y-m-d\TH:i:s.u P',                // 2025-09-13T18:56:07.000 +02:00
+            'Y-m-d\TH:i:s.uP',                 // 2025-09-13T18:56:07.000+02:00
+            'Y-m-d\TH:i:sP',                   // 2025-09-13T18:56:07+02:00
+            'Y-m-d\TH:i:s O',                  // 2025-09-13T18:56:07 +0200
+            'Y-m-d\TH:i:sO',                   // 2025-09-13T18:56:07+0200
+        ];
+
+        foreach ($formats as $format) {
+            try {
+                $date = Carbon::createFromFormat($format, $dateTime);
+                if ($date !== false) {
+                    return $date;
+                }
+            } catch (\Exception $e) {
+                continue;
+            }
+        }
+
+        // Fallback to general DateTime parsing
+        return new Carbon($dateTime);
+    }
+
     public function extractReceiptData(array $apiResponse): array
     {
         return [
-            'fiscal_id' => $apiResponse['id'],
+            'fiscal_id' => $apiResponse['id'] ?? $apiResponse['fic'] ?? $apiResponse['iic'] ?? 'unknown',
             'total_price' => $apiResponse['totalPrice'],
             'total_price_without_vat' => $apiResponse['totalPriceWithoutVAT'],
             'total_vat_amount' => $apiResponse['totalVATAmount'],
@@ -162,7 +285,7 @@ class AlbanianFiscalService
             'tcr_code' => $apiResponse['tcrCode'],
             'operator_code' => $apiResponse['operatorCode'] ?? null,
             'software_code' => $apiResponse['softwareCode'] ?? null,
-            'receipt_created_at' => Carbon::parse($apiResponse['dateTimeCreated']),
+            'receipt_created_at' => $this->parseAlbanianDateTime($apiResponse['dateTimeCreated']),
             'tax_free_amount' => $apiResponse['taxFreeAmt'] ?? 0,
             'invoice_type' => $apiResponse['invoiceType'],
             'invoice_version' => $apiResponse['invoiceVersion'],
@@ -191,7 +314,7 @@ class AlbanianFiscalService
 
         foreach ($apiResponse['items'] as $item) {
             $items[] = [
-                'item_fiscal_id' => $item['id'],
+                'item_fiscal_id' => $item['id'] ?? 'item_' . $item['code'] ?? 'unknown',
                 'name' => $item['name'],
                 'code' => $item['code'],
                 'unit' => $item['unit'],
@@ -219,7 +342,7 @@ class AlbanianFiscalService
         if (isset($apiResponse['sameTaxes'])) {
             foreach ($apiResponse['sameTaxes'] as $tax) {
                 $summaries[] = [
-                    'tax_fiscal_id' => $tax['id'],
+                    'tax_fiscal_id' => $tax['id'] ?? 'tax_' . $tax['vatRate'] ?? 'unknown',
                     'number_of_items' => $tax['numberOfItems'],
                     'price_before_vat' => $tax['priceBeforeVat'],
                     'vat_rate' => $tax['vatRate'],

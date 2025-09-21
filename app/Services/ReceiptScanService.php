@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\ReceiptException;
 use App\Models\ScannedReceipt;
 use App\Models\Seller;
 use App\Models\User;
@@ -20,22 +21,16 @@ class ReceiptScanService
         try {
             DB::beginTransaction();
 
-            // Step 1: Parse QR URL or extract data
-            $qrData = $this->parseQrInput($qrUrlOrData);
-            if (!$qrData) {
-                return $this->errorResponse('Invalid QR code format');
-            }
+            // Step 1: Parse QR URL or extract data with strict validation
+            $qrData = $this->fiscalService->parseQrInputStrict($qrUrlOrData);
 
             // Step 2: Check if receipt is expired (before API call)
             if ($this->fiscalService->isReceiptExpired($qrData['dateTimeCreated'])) {
-                return $this->errorResponse('Receipt has expired and cannot be scanned');
+                throw ReceiptException::expired($qrData['dateTimeCreated']);
             }
 
             // Step 3: Check for duplicates
-            $duplicateCheck = $this->checkForDuplicates($user, $qrData['iic']);
-            if (!$duplicateCheck['allowed']) {
-                return $this->errorResponse($duplicateCheck['message']);
-            }
+            $this->validateNoDuplicates($user, $qrData['iic']);
 
             // Step 4: Call Albanian Fiscal API
             $apiResult = $this->fiscalService->verifyInvoice(
@@ -46,16 +41,22 @@ class ReceiptScanService
             );
 
             if (!$apiResult['success']) {
-                return $this->errorResponse($apiResult['error']);
+                throw ReceiptException::apiFailed($apiResult['error']);
             }
 
             $apiData = $apiResult['data'];
 
-            // Step 5: Create or update seller
+            // Step 5: Validate Albanian origin
+            if (!$this->fiscalService->isValidAlbanianReceipt($apiData)) {
+                $country = $apiData['seller']['country'] ?? 'unknown';
+                throw ReceiptException::notAlbanian($country);
+            }
+
+            // Step 6: Create or update seller
             $sellerData = $this->fiscalService->extractSellerData($apiData);
             $seller = Seller::findOrCreateBySeller($sellerData);
 
-            // Step 6: Create scanned receipt record
+            // Step 7: Create scanned receipt record
             $receiptData = $this->fiscalService->extractReceiptData($apiData);
             $receiptData['user_id'] = $user->id;
             $receiptData['seller_id'] = $seller->id;
@@ -67,14 +68,14 @@ class ReceiptScanService
 
             $scannedReceipt = ScannedReceipt::create($receiptData);
 
-            // Step 7: Create receipt items
+            // Step 8: Create receipt items
             $itemsData = $this->fiscalService->extractItemsData($apiData);
             foreach ($itemsData as $itemData) {
                 $itemData['scanned_receipt_id'] = $scannedReceipt->id;
                 $scannedReceipt->items()->create($itemData);
             }
 
-            // Step 8: Create tax summaries
+            // Step 9: Create tax summaries
             $taxSummariesData = $this->fiscalService->extractTaxSummariesData($apiData);
             foreach ($taxSummariesData as $taxData) {
                 $taxData['scanned_receipt_id'] = $scannedReceipt->id;
@@ -99,6 +100,18 @@ class ReceiptScanService
                 ],
             ];
 
+        } catch (ReceiptException $e) {
+            DB::rollBack();
+
+            Log::warning('Receipt validation failed', [
+                'user_id' => $user->id,
+                'error_code' => $e->getErrorCode(),
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+            ]);
+
+            return $this->errorResponse($e->getUserFriendlyMessage());
+
         } catch (\Exception $e) {
             DB::rollBack();
 
@@ -108,7 +121,7 @@ class ReceiptScanService
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return $this->errorResponse('An error occurred while processing the receipt');
+            return $this->errorResponse('An unexpected error occurred while processing the receipt');
         }
     }
 
@@ -128,6 +141,22 @@ class ReceiptScanService
         }
 
         return null;
+    }
+
+    /**
+     * Validate that receipt hasn't been scanned before
+     */
+    private function validateNoDuplicates(User $user, string $iic): void
+    {
+        // Check if this specific user has already scanned this receipt
+        if (ScannedReceipt::userAlreadyScanned($user->id, $iic)) {
+            throw ReceiptException::duplicate($iic, true);
+        }
+
+        // Check if any user has already scanned this receipt (global duplicate check)
+        if (ScannedReceipt::existsByIic($iic)) {
+            throw ReceiptException::duplicate($iic, false);
+        }
     }
 
     private function checkForDuplicates(User $user, string $iic): array

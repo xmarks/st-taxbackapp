@@ -72,7 +72,7 @@ class ScannedReceipt extends Model
 
     public function isValidForScanning(): bool
     {
-        $validityHours = config('receipt.validity_hours', 24);
+        $validityHours = (int) config('receipt.validity_hours', 24);
         $expiryTime = $this->receipt_created_at->addHours($validityHours);
 
         return Carbon::now()->lte($expiryTime);
@@ -80,7 +80,7 @@ class ScannedReceipt extends Model
 
     public function wasScannedInTime(): bool
     {
-        $validityHours = config('receipt.validity_hours', 24);
+        $validityHours = (int) config('receipt.validity_hours', 24);
         $expiryTime = $this->receipt_created_at->addHours($validityHours);
 
         return $this->scanned_at->lte($expiryTime);

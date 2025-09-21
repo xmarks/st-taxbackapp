@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ReceiptException;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ProcessReceiptScanRequest;
 use App\Models\ScannedReceipt;
+use App\Services\AlbanianFiscalService;
 use App\Services\ReceiptScanService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -142,46 +145,51 @@ class ReceiptController extends Controller
             'qr_data' => 'required|string',
         ]);
 
-        // This endpoint just validates the QR format without saving
-        $qrData = null;
+        try {
+            // Use strict validation
+            $fiscalService = app(AlbanianFiscalService::class);
+            $qrData = $fiscalService->parseQrInputStrict($request->qr_data);
 
-        if (str_contains($request->qr_data, 'efiskalizimi-app.tatime.gov.al')) {
-            $fiscalService = app(\App\Services\AlbanianFiscalService::class);
-            $qrData = $fiscalService->parseQrUrl($request->qr_data);
-        }
+            // Check if receipt is expired
+            $isExpired = $fiscalService->isReceiptExpired($qrData['dateTimeCreated']);
 
-        if (!$qrData) {
+            if ($isExpired) {
+                throw ReceiptException::expired($qrData['dateTimeCreated']);
+            }
+
+            // Check if already scanned
+            $alreadyScanned = ScannedReceipt::existsByIic($qrData['iic']);
+
             return response()->json([
-                'success' => false,
-                'message' => 'Invalid QR code format',
-            ], 422);
-        }
-
-        // Check if receipt is expired
-        $fiscalService = app(\App\Services\AlbanianFiscalService::class);
-        $isExpired = $fiscalService->isReceiptExpired($qrData['dateTimeCreated']);
-
-        if ($isExpired) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Receipt has expired and cannot be scanned',
-            ], 422);
-        }
-
-        // Check if already scanned
-        $alreadyScanned = ScannedReceipt::existsByIic($qrData['iic']);
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'valid' => true,
-                'already_scanned' => $alreadyScanned,
-                'receipt_data' => [
-                    'iic' => $qrData['iic'],
-                    'price' => $qrData['price'],
-                    'date_created' => $qrData['dateTimeCreated'],
+                'success' => true,
+                'data' => [
+                    'valid' => true,
+                    'already_scanned' => $alreadyScanned,
+                    'receipt_data' => [
+                        'iic' => $qrData['iic'],
+                        'price' => $qrData['price'],
+                        'date_created' => $qrData['dateTimeCreated'],
+                    ],
                 ],
-            ],
-        ]);
+            ]);
+
+        } catch (ReceiptException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getUserFriendlyMessage(),
+                'error_code' => $e->getErrorCode(),
+            ], $e->getStatusCode());
+
+        } catch (\Exception $e) {
+            Log::error('Receipt validation API error', [
+                'user_id' => $request->user()->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'An error occurred while validating the receipt',
+            ], 500);
+        }
     }
 }
