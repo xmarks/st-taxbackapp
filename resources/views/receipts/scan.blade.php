@@ -41,13 +41,32 @@
                     <!-- Camera Scanner Section -->
                     <div x-show="showCamera" x-transition class="mb-8">
                         <div class="text-center">
-                            <video x-ref="scanner" class="mx-auto max-w-full rounded-lg shadow-lg" style="max-width: 400px; max-height: 300px;"></video>
+                            <div class="relative">
+                                <div x-ref="scanner" id="scanner-container" class="mx-auto max-w-full rounded-lg shadow-lg" style="max-width: 400px; min-height: 300px;"></div>
+
+                                <!-- Loading overlay -->
+                                <div x-show="cameraLoading" class="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                    <div class="text-center">
+                                        <svg class="animate-spin h-8 w-8 text-blue-600 mx-auto mb-2" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        <p class="text-sm text-gray-600 dark:text-gray-400">Starting camera...</p>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="mt-4">
                                 <button @click="stopCamera()" class="inline-flex items-center px-4 py-2 bg-red-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-red-700 focus:bg-red-700 active:bg-red-900 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition ease-in-out duration-150">
                                     Stop Camera
                                 </button>
                             </div>
-                            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Point your camera at the QR code on your receipt</p>
+
+                            <p x-show="!cameraLoading && !cameraError" class="mt-2 text-sm text-gray-500 dark:text-gray-400">Point your camera at the QR code on your receipt</p>
+
+                            <div x-show="cameraError" class="mt-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                                <p class="text-sm text-red-600 dark:text-red-400" x-text="cameraError"></p>
+                            </div>
                         </div>
                     </div>
 
@@ -90,8 +109,29 @@
                             <li>• Each receipt can only be scanned once</li>
                             <li>• VAT amount will be calculated and added to your profile</li>
                             <li>• For desktop users: right-click QR code → "Copy link address" → paste here</li>
+                            <li>• Camera requires HTTPS connection and permission to access camera</li>
+                            <li>• On mobile: ensure you're using Chrome, Safari, or Firefox for best camera support</li>
                         </ul>
                     </div>
+
+                    <!-- HTTPS Warning -->
+                    @if(!request()->secure() && !app()->environment('local'))
+                    <div class="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <h4 class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">HTTPS Required</h4>
+                                <p class="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                                    Camera access requires a secure HTTPS connection. If the camera isn't working, please use the manual entry option or contact support.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    @endif
                 </div>
             </div>
         </div>
@@ -105,6 +145,8 @@
                 showManual: {{ $errors->has('qr_data') || old('qr_data') ? 'true' : 'false' }},
                 showCamera: false,
                 html5QrcodeScanner: null,
+                cameraError: '',
+                cameraLoading: false,
 
                 showManualForm() {
                     this.showManual = true;
@@ -119,6 +161,8 @@
                 startCamera() {
                     this.showCamera = true;
                     this.showManual = false;
+                    this.cameraError = '';
+                    this.cameraLoading = true;
 
                     this.$nextTick(() => {
                         this.initializeScanner();
@@ -130,31 +174,78 @@
                     this.cleanupScanner();
                 },
 
-                cleanupScanner() {
+                async cleanupScanner() {
                     if (this.html5QrcodeScanner) {
-                        this.html5QrcodeScanner.clear();
+                        try {
+                            await this.html5QrcodeScanner.stop();
+                            this.html5QrcodeScanner.clear();
+                        } catch (error) {
+                            console.log('Error cleaning up scanner:', error);
+                        }
                         this.html5QrcodeScanner = null;
                     }
                 },
 
-                initializeScanner() {
-                    if (typeof Html5QrcodeScanner !== 'undefined') {
-                        this.html5QrcodeScanner = new Html5QrcodeScanner(
-                            this.$refs.scanner,
-                            {
-                                fps: 10,
-                                qrbox: { width: 250, height: 250 },
-                                rememberLastUsedCamera: true
-                            },
-                            false
-                        );
+                async initializeScanner() {
+                    if (typeof Html5Qrcode !== 'undefined') {
+                        try {
+                            // Get available cameras
+                            const devices = await Html5Qrcode.getCameras();
 
-                        this.html5QrcodeScanner.render(
-                            (decodedText) => this.onScanSuccess(decodedText),
-                            (error) => this.onScanFailure(error)
-                        );
+                            if (devices && devices.length > 0) {
+                                // Try to find rear camera first, fallback to any camera
+                                let cameraId = devices[0].id;
+
+                                // Look for rear/back camera
+                                const rearCamera = devices.find(device =>
+                                    device.label.toLowerCase().includes('back') ||
+                                    device.label.toLowerCase().includes('rear') ||
+                                    device.label.toLowerCase().includes('environment')
+                                );
+
+                                if (rearCamera) {
+                                    cameraId = rearCamera.id;
+                                }
+
+                                // Initialize Html5Qrcode
+                                this.html5QrcodeScanner = new Html5Qrcode("scanner-container");
+
+                                // Start scanning with the selected camera
+                                await this.html5QrcodeScanner.start(
+                                    cameraId,
+                                    {
+                                        fps: 10,
+                                        qrbox: { width: 250, height: 250 },
+                                        aspectRatio: 1.0
+                                    },
+                                    (decodedText) => this.onScanSuccess(decodedText),
+                                    (error) => this.onScanFailure(error)
+                                );
+
+                                console.log('Camera started successfully with:', rearCamera ? rearCamera.label : devices[0].label);
+                                this.cameraLoading = false;
+
+                            } else {
+                                this.cameraError = 'No cameras found on this device.';
+                                this.cameraLoading = false;
+                            }
+                        } catch (error) {
+                            console.error('Failed to initialize scanner:', error);
+                            if (error.name === 'NotAllowedError') {
+                                this.cameraError = 'Camera permission denied. Please allow camera access and try again.';
+                            } else if (error.name === 'NotFoundError') {
+                                this.cameraError = 'No camera found on this device.';
+                            } else if (error.name === 'NotSupportedError') {
+                                this.cameraError = 'Camera not supported by this browser. Try using Chrome or Safari.';
+                            } else {
+                                this.cameraError = 'Failed to access camera: ' + error.message;
+                            }
+                            this.cameraLoading = false;
+                        }
                     } else {
-                        console.error('Html5QrcodeScanner not loaded');
+                        console.error('Html5Qrcode not loaded');
+                        this.cameraError = 'QR scanner library failed to load. Please refresh the page and try again.';
+                        this.cameraLoading = false;
                     }
                 },
 
@@ -178,8 +269,18 @@
                 },
 
                 onScanFailure(error) {
-                    // Handle scan failure - usually just ignore
-                    console.log(`QR Code scan error: ${error}`);
+                    // Handle scan failure - only show critical errors
+                    if (error.includes('Permission denied') || error.includes('NotAllowedError')) {
+                        this.cameraError = 'Camera permission denied. Please allow camera access and try again.';
+                    } else if (error.includes('NotFoundError') || error.includes('DevicesNotFoundError')) {
+                        this.cameraError = 'No camera found. Please check that your device has a camera.';
+                    } else if (error.includes('NotSupportedError')) {
+                        this.cameraError = 'Camera not supported by this browser. Try using Chrome or Safari.';
+                    }
+                    // Don't log common scanning errors like "QR code not found"
+                    if (!error.includes('QR code parse error') && !error.includes('No MultiFormat Readers')) {
+                        console.log(`QR Code scan error: ${error}`);
+                    }
                 }
             };
         }
