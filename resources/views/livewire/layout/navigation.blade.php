@@ -12,7 +12,7 @@ new class extends Component
     {
         $logout();
 
-        $this->redirect('/', navigate: true);
+        $this->redirect('/');
     }
 }; ?>
 
@@ -58,9 +58,6 @@ new class extends Component
                         <x-slot name="content">
                             <x-dropdown-link :href="route('admin.users.index')" wire:navigate>
                                 {{ __('Users') }}
-                            </x-dropdown-link>
-                            <x-dropdown-link :href="route('admin.users.create')" wire:navigate>
-                                {{ __('Create User') }}
                             </x-dropdown-link>
                         </x-slot>
                     </x-dropdown>
@@ -125,9 +122,6 @@ new class extends Component
                     </div>
                     <x-responsive-nav-link :href="route('admin.users.index')" :active="request()->routeIs('admin.users.*')" wire:navigate>
                         {{ __('Users') }}
-                    </x-responsive-nav-link>
-                    <x-responsive-nav-link :href="route('admin.users.create')" wire:navigate>
-                        {{ __('Create User') }}
                     </x-responsive-nav-link>
                 </div>
             @endcan
