@@ -9,7 +9,7 @@ Route::view('/', 'welcome');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     // Dashboard
-    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('/dashboard', \App\Livewire\Dashboard::class)->name('dashboard');
 
     // Receipt Management
     Route::get('/receipts', \App\Livewire\ReceiptManagement::class)->name('receipts.index');
